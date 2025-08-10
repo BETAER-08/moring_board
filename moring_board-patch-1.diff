@@ -1,0 +1,91 @@
+*** Begin Patch
+*** Update File: services/api.ts
+@@
+-import axios from 'axios';
+-import { BusArrivalInfo, BusRouteDetails, City, StopSearchResult, BusLocation, BusRouteStop, FavoriteBus } from '../types';
+-import { allCities } from '../data/cities';
+-
+-const SERVICE_KEY = '8KL46HqqhxK4T/UAB0bJfFacYRrfoNpOhZrvgwr1MVBIdUAJqoOhZe7WZZwjsKSJbuatjZDvR2+GZBhvdBGdng==';
++import axios from 'axios';
++import AsyncStorage from '@react-native-async-storage/async-storage';
++import { BusArrivalInfo, BusRouteDetails, City, StopSearchResult, BusLocation, BusRouteStop, FavoriteBus } from '../types';
++import { allCities } from '../data/cities';
++
++// 키는 .env에 EXPO_PUBLIC_BUS_KEY로 보관한다.
++const SERVICE_KEY = process.env.EXPO_PUBLIC_BUS_KEY as string;
++axios.defaults.timeout = 8000;
++
++const sleep = (ms:number)=>new Promise(r=>setTimeout(r,ms));
++async function withRetry<T>(fn:()=>Promise<T>, tries=3): Promise<T> {
++  let lastErr:any;
++  for (let i=0;i<tries;i++){
++    try { return await fn(); }
++    catch(e){ lastErr=e; await sleep(300*(i+1)); }
++  }
++  throw lastErr;
++}
++
++async function getCache<T>(k:string){ const v=await AsyncStorage.getItem(k); return v?JSON.parse(v) as T:null; }
++async function setCache<T>(k:string,v:T){ await AsyncStorage.setItem(k, JSON.stringify(v)); }
+@@
+-export const fetchRoutesForStop_Test = async (stopId: string, cityCode: string): Promise<FavoriteBus[]> => {
++// 정류장 경유 노선 목록
++export const fetchRoutesForStop = async (stopId: string, cityCode: string): Promise<FavoriteBus[]> => {
+   const url = `http://apis.data.go.kr/1613000/BusSttnInfoInqireService/getSttnThrghRouteList`;
+   const params = {
+     serviceKey: SERVICE_KEY,
+     _type: 'json',
+-    nodeid: stopId,
+-    cityCode: cityCode,
+-    numOfRows: '100'
++    nodeid: stopId,
++    cityCode: cityCode,
++    numOfRows: '200'
+   };
+-  try {
+-    const response = await axios.get(url, { params });
+-    const items = response.data?.response?.body?.items?.item || [];
+-    const list = Array.isArray(items) ? items : [items];
+-    return list.map((item: any) => ({ routeId: item.routeid, routeNo: item.routeno }));
+-  } catch (error) {
+-    console.error(`[${stopId}] 정류소 경유 노선 목록 API 실패:`, error);
+-    return [];
+-  }
++  try {
++    const { data } = await withRetry(() => axios.get(url, { params }));
++    const items = data?.response?.body?.items?.item || [];
++    const list = Array.isArray(items) ? items : [items];
++    return list.map((item: any) => ({ routeId: item.routeid, routeNo: item.routeno }));
++  } catch (error) {
++    console.error(`[${stopId}] 경유 노선 목록 API 실패:`, error);
++    return [];
++  }
+ };
+@@
+-export const fetchAllBusesForStop = async (stopId: string, cityCode: string): Promise<BusArrivalInfo[]> => {
++export const fetchAllBusesForStop = async (stopId: string, cityCode: string): Promise<BusArrivalInfo[]> => {
+   const url = `http://apis.data.go.kr/1613000/ArvlInfoInqireService/getSttnAcctoArvlPrearngeInfoList`;
+   const params = { serviceKey: SERVICE_KEY, _type: 'json', nodeId: stopId, cityCode: cityCode, numOfRows: '100' };
+   try {
+-    const response = await axios.get(url, { params });
++    const cacheKey = `arr:${cityCode}:${stopId}`;
++    const response = await withRetry(()=>axios.get(url, { params }));
+     const items = response.data?.response?.body?.items?.item || [];
+     const arrivalList = Array.isArray(items) ? items : [items];
+-    return arrivalList.map((item: any) => ({ routeId: item.route...item.arrtime / 60), remainingStops: item.arrprevstationcnt, }));
+-  } catch (error) { console.error(`[${stopId}] 버스 도착 정보 API 실패:`, error); return []; }
++    const parsed = arrivalList.map((item: any) => ({
++      routeId: item.routeid,
++      routeNo: item.routeno,
++      arrTime: Math.round(item.arrtime / 60),
++      remainingStops: item.arrprevstationcnt,
++    }));
++    await setCache(cacheKey, parsed);
++    return parsed;
++  } catch (error) {
++    console.error(`[${stopId}] 버스 도착 정보 API 실패:`, error);
++    const cached = await getCache<BusArrivalInfo[]>(`arr:${cityCode}:${stopId}`);
++    return cached ?? [];
++  }
+ };
+*** End Patch

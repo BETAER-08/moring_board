@@ -1,0 +1,8 @@
+*** Begin Patch
+*** Update File: .gitignore
+@@
+ # local env files
+-.env*.local
++.env
++.env*.local
+*** End Patch
